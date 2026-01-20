@@ -50,6 +50,13 @@ In Blender:
 - Select `packages/chiron_blender_addon/chiron_mcp_addon.zip` (build step below)
 - Enable "ChironMCP"
 
+If you update the add-on code and don't see changes:
+
+- Rebuild the zip with `scripts/build_addon_zip.sh`
+- Disable or remove the existing "ChironMCP" add-on in Preferences
+- Restart Blender
+- Install `dist/chiron_mcp_addon.zip` and enable it again
+
 ### 3) Verify
 
 - Open the sidebar panel (N-panel) -> "Chiron"

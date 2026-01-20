@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from mcp.server.fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 mcp = FastMCP("ChironMCP Server", json_response=True)
 
@@ -73,6 +75,33 @@ def ui_highlight(target: str) -> Dict[str, Any]:
 def status() -> str:
     """Server status resource."""
     return "ChironMCP server is running."
+
+
+# ---- HTTP endpoints for Blender add-on ----
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health_check(request: Request) -> JSONResponse:
+    return JSONResponse({"ok": True, "status": "ok", "name": mcp.name})
+
+
+@mcp.custom_route("/blender/toast", methods=["POST"])
+async def blender_toast(request: Request) -> JSONResponse:
+    payload = await request.json()
+    message = payload.get("message", "")
+    level = payload.get("level", "INFO")
+    return JSONResponse({"ok": True, "message": message, "level": level})
+
+
+@mcp.custom_route("/blender/highlight", methods=["POST"])
+async def blender_highlight(request: Request) -> JSONResponse:
+    payload = await request.json()
+    target = payload.get("target", "")
+    return JSONResponse({"ok": True, "target": target})
+
+
+def create_app():
+    return mcp.streamable_http_app()
 
 
 if __name__ == "__main__":
