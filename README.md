@@ -20,6 +20,7 @@ Blender's licensing guidance is clear that Python add-ons using Blender's API mu
   - exposes a safe tool surface for tutoring
   - renders tutorial UI in Blender
   - reports context + validates step completion locally
+  - supports Learning Paths with topic tracking
 
 - `packages/chiron_mcp_server/`
   An MCP server that:
@@ -62,10 +63,24 @@ If you update the add-on code and don't see changes:
 - Open the sidebar panel (N-panel) -> "Chiron"
 - Click "Ping Server"
 - Confirm you see a toast + a successful response
+- Choose a Learning Path + topic and click "Generate Lesson"
+
+## Learning Paths (demo)
+
+Chiron mirrors the Blender manual structure to drive topic-based lessons.
+
+- Enable "Modeling > Geometry Nodes" in Add-on Preferences.
+- In the Chiron panel, pick a topic and click "Generate Lesson."
+- Completed topics are hidden; use "Reset Lesson History" to re-test.
+- Progress persists to `chiron/progress.json` and `chiron/lesson_history.json` in Blender's config dir.
+
+Current Geometry Nodes topics are derived from the manual HTML tree in:
+`https://github.com/murdadrum/Blender50Manual` (blender_manual_v500_en.html/modeling/geometry_nodes).
 
 ## Roadmap
 
 - Tutorial runtime (local): UI highlights + deterministic step checks
+- Learning Paths (Geometry Nodes) + topic tracking
 - Signed lesson packs: versioned, cacheable, offline-friendly
 - Auth gateway: OAuth device flow to a future Chiron Cloud Brain
 - Multi-model support: Gemini today; pluggable model adapters tomorrow

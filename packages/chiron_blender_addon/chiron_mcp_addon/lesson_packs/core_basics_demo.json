@@ -1,0 +1,59 @@
+{
+  "lesson_id": "core_basics_demo",
+  "version": 1,
+  "title": "Core Basics Demo",
+  "steps": [
+    {
+      "step_id": "select-cube",
+      "title": "Select the cube",
+      "instruction": "Select the default Cube object.",
+      "hint": "Click the Cube in the viewport or select it in the Outliner.",
+      "validator": {
+        "name": "object_selected",
+        "args": {
+          "name": "Cube"
+        }
+      },
+      "ui_diagram": {
+        "type": "ui_diagram",
+        "editor": "OUTLINER",
+        "tab": "Scene Collection",
+        "callout": "Select the Cube",
+        "breadcrumbs": ["Outliner", "Scene Collection", "Cube"]
+      }
+    },
+    {
+      "step_id": "move-cube-x",
+      "title": "Move the cube on X",
+      "instruction": "Move the Cube along the X axis.",
+      "hint": "Press G then X, then move the mouse and click to confirm.",
+      "validator": {
+        "name": "object_moved_axis",
+        "args": {
+          "name": "Cube",
+          "axis": "X",
+          "min_abs": 0.01
+        }
+      }
+    },
+    {
+      "step_id": "add-mesh",
+      "title": "Add a second mesh",
+      "instruction": "Add a new mesh object to the scene.",
+      "hint": "Use Add -> Mesh -> UV Sphere.",
+      "validator": {
+        "name": "mesh_count_at_least",
+        "args": {
+          "count": 2
+        }
+      },
+      "ui_diagram": {
+        "type": "ui_diagram",
+        "editor": "VIEW_3D",
+        "tab": "Add",
+        "callout": "Add a mesh",
+        "breadcrumbs": ["3D Viewport", "Add", "Mesh", "UV Sphere"]
+      }
+    }
+  ]
+}

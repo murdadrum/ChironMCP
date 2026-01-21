@@ -1,4 +1,8 @@
+import base64
+import hashlib
 import json
+import os
+import tempfile
 import time
 import urllib.request
 
@@ -7,15 +11,15 @@ import blf
 import gpu
 from gpu_extras.batch import batch_for_shader
 
+from . import learning_paths, lesson_runtime, lesson_tracking
+
 try:
     import bgl  # Blender < 4.x
 except Exception:
     bgl = None
 
 DEFAULT_MCP_HTTP = "http://localhost:8000"
-_DRAW_HANDLE = None
-_DRAW_AREA = None
-_DRAW_REGION = None
+_DRAW_HANDLES = []
 _TOAST_MESSAGE = ""
 _TOAST_EXPIRES = 0.0
 _HIGHLIGHT_TARGET = ""
@@ -24,6 +28,17 @@ _OVERLAY_TICK = 0.1
 _TIMER_ACTIVE = False
 _DEBUG_OVERLAY = False
 _DEBUG_EXPIRES = 0.0
+
+SUPPORTED_SPACES = (
+    bpy.types.SpaceView3D,
+    bpy.types.SpaceProperties,
+    bpy.types.SpaceOutliner,
+    bpy.types.SpaceNodeEditor,
+    bpy.types.SpacePreferences,
+    bpy.types.SpaceConsole,
+    bpy.types.SpaceInfo,
+)
+SUPPORTED_REGIONS = ("WINDOW", "HEADER", "TOOLS", "UI")
 
 
 def _now() -> float:
@@ -34,26 +49,35 @@ def _tag_redraw():
     wm = bpy.context.window_manager
     for window in wm.windows:
         for area in window.screen.areas:
-            if area.type == "VIEW_3D":
-                area.tag_redraw()
+            area.tag_redraw()
 
 
 def _ensure_draw_handler():
-    global _DRAW_HANDLE
-    if _DRAW_HANDLE is None:
-        _DRAW_HANDLE = bpy.types.SpaceView3D.draw_handler_add(
-            _draw_callback_px,
-            (),
-            "WINDOW",
-            "POST_PIXEL",
-        )
+    global _DRAW_HANDLES
+    if _DRAW_HANDLES:
+        return
+    for space_type in SUPPORTED_SPACES:
+        for region_type in SUPPORTED_REGIONS:
+            try:
+                handle = space_type.draw_handler_add(
+                    _draw_callback_px,
+                    (),
+                    region_type,
+                    "POST_PIXEL",
+                )
+                _DRAW_HANDLES.append((space_type, region_type, handle))
+            except Exception:
+                continue
 
 
 def _remove_draw_handler():
-    global _DRAW_HANDLE
-    if _DRAW_HANDLE is not None:
-        bpy.types.SpaceView3D.draw_handler_remove(_DRAW_HANDLE, "WINDOW")
-        _DRAW_HANDLE = None
+    global _DRAW_HANDLES
+    for space_type, region_type, handle in _DRAW_HANDLES:
+        try:
+            space_type.draw_handler_remove(handle, region_type)
+        except Exception:
+            continue
+    _DRAW_HANDLES = []
 
 
 def _overlay_tick():
@@ -111,15 +135,70 @@ def _show_debug_overlay(duration: float = 3.0):
     _tag_redraw()
 
 
-def _set_draw_context(context):
-    global _DRAW_AREA, _DRAW_REGION
+def _parse_highlight_target(target: str):
+    if not target:
+        return None, None
+    if ":" in target:
+        area_part, region_part = target.split(":", 1)
+        return area_part.strip().upper(), region_part.strip().upper()
+    region_only = {"TOOLS", "UI", "HEADER", "WINDOW"}
+    if target.upper() in region_only:
+        return None, target.upper()
+    return target.upper(), "WINDOW"
+
+
+def _diagram_spec_for_step(step):
+    if not step:
+        return None
+    return step.ui_diagram
+
+
+def _diagram_cache_path(spec: dict) -> str:
+    spec_json = json.dumps(spec, sort_keys=True)
+    digest = hashlib.sha256(spec_json.encode("utf-8")).hexdigest()[:12]
+    temp_dir = bpy.app.tempdir or tempfile.gettempdir()
+    return os.path.join(temp_dir, f"chiron_diagram_{digest}.png")
+
+
+def _fetch_diagram(spec: dict):
     try:
-        if context.area and context.area.type == "VIEW_3D":
-            _DRAW_AREA = context.area
-        if context.region and context.region.type == "WINDOW":
-            _DRAW_REGION = context.region
+        response = _http_post(f"{DEFAULT_MCP_HTTP}/ui/diagram", spec)
     except Exception:
-        return
+        return None
+    if not response.get("ok"):
+        return None
+    b64 = response.get("image_base64")
+    if not b64:
+        return None
+    try:
+        data = base64.b64decode(b64)
+    except Exception:
+        return None
+    path = _diagram_cache_path(spec)
+    try:
+        with open(path, "wb") as handle:
+            handle.write(data)
+        image = bpy.data.images.load(path, check_existing=True)
+        return image.name
+    except Exception:
+        return None
+
+
+def _update_diagram_for_current_step(wm) -> bool:
+    lesson_id = _get_lesson_id(wm)
+    step = lesson_runtime.get_step(lesson_id, wm.chiron_step_index)
+    spec = _diagram_spec_for_step(step)
+    if not spec:
+        wm.chiron_diagram_image = ""
+        wm.chiron_diagram_status = "No diagram for this step"
+        return False
+    image_name = _fetch_diagram(spec)
+    if image_name:
+        wm.chiron_diagram_image = image_name
+        wm.chiron_diagram_status = "Diagram updated"
+        return True
+    wm.chiron_diagram_status = "Diagram fetch failed"
+    return False
 
 
 def ensure_overlay_handler():
@@ -217,27 +296,25 @@ def _draw_callback_px():
         region = None
         area = None
 
-    if _DRAW_REGION is not None:
-        region = _DRAW_REGION
-    if _DRAW_AREA is not None:
-        area = _DRAW_AREA
-
-    if region is not None and region.type != "WINDOW":
-        region = None
-
-    if region is None and area and area.type == "VIEW_3D":
-        for candidate in area.regions:
-            if candidate.type == "WINDOW":
-                region = candidate
-                break
-
-    if region is None:
+    if region is None or area is None:
         return
 
     w = region.width
     h = region.height
-
+    draw_toast = False
+    draw_highlight = False
     if _TOAST_MESSAGE:
+        draw_toast = area.type == "VIEW_3D" and region.type == "WINDOW"
+    if _HIGHLIGHT_TARGET:
+        target_area, target_region = _parse_highlight_target(_HIGHLIGHT_TARGET)
+        if target_area and area.type != target_area:
+            draw_highlight = False
+        elif target_region and region.type != target_region:
+            draw_highlight = False
+        else:
+            draw_highlight = True
+
+    if draw_toast:
         padding = 10
         box_w = min(520, w - 2 * padding)
         box_h = 30
@@ -246,7 +323,7 @@ def _draw_callback_px():
         _draw_rect_filled(x, y, box_w, box_h, (0.1, 0.5, 0.1, 0.9))
         _draw_text(_TOAST_MESSAGE, x + 8, y + 8, size=14, color=(1, 1, 1, 1))
 
-    if _HIGHLIGHT_TARGET:
+    if draw_highlight:
         margin = 6
         _draw_rect_outline(margin, margin, w - margin * 2, h - margin * 2, (1, 0.2, 0.2, 1), width=4)
         _draw_text(f"Highlight: {_HIGHLIGHT_TARGET}", margin + 8, margin + 12, size=12, color=(1, 0.2, 0.2, 1))
@@ -315,7 +392,6 @@ class CHIRON_OT_send_toast(bpy.types.Operator):
     def execute(self, context):
         wm = context.window_manager
         try:
-            _set_draw_context(context)
             payload = {"message": wm.chiron_toast_message, "level": "INFO"}
             response = _http_post(f"{DEFAULT_MCP_HTTP}/blender/toast", payload)
             if response.get("ok"):
@@ -338,7 +414,6 @@ class CHIRON_OT_send_highlight(bpy.types.Operator):
     def execute(self, context):
         wm = context.window_manager
         try:
-            _set_draw_context(context)
             payload = {"target": wm.chiron_highlight_target}
             response = _http_post(f"{DEFAULT_MCP_HTTP}/blender/highlight", payload)
             if response.get("ok"):
@@ -351,3 +426,202 @@ class CHIRON_OT_send_highlight(bpy.types.Operator):
         except Exception as e:
             self.report({"ERROR"}, f"Highlight error: {e}")
             return {"CANCELLED"}
+
+
+def _get_lesson_id(wm) -> str:
+    return wm.chiron_lesson_id or lesson_runtime.DEFAULT_LESSON_ID
+
+
+def _set_status(wm, message: str):
+    wm.chiron_step_status = message
+
+
+def _set_topic_status(wm, message: str):
+    wm.chiron_topic_status = message
+
+
+def _save_progress(wm):
+    learning_path_id = wm.chiron_active_learning_path
+    if learning_path_id == "NONE":
+        learning_path_id = ""
+    lesson_runtime.save_progress(
+        wm.chiron_lesson_id,
+        wm.chiron_step_index,
+        learning_path_id=learning_path_id,
+        topic_key=wm.chiron_current_topic_key,
+    )
+
+
+class CHIRON_OT_diagram_fetch(bpy.types.Operator):
+    bl_idname = "chiron.diagram_fetch"
+    bl_label = "Refresh Diagram"
+    bl_description = "Fetch the UI diagram for the current step"
+
+    def execute(self, context):
+        wm = context.window_manager
+        ok = _update_diagram_for_current_step(wm)
+        if ok:
+            self.report({"INFO"}, "Diagram updated")
+            return {"FINISHED"}
+        self.report({"WARNING"}, wm.chiron_diagram_status)
+        return {"CANCELLED"}
+
+
+class CHIRON_OT_lesson_generate(bpy.types.Operator):
+    bl_idname = "chiron.lesson_generate"
+    bl_label = "Generate Lesson"
+    bl_description = "Generate a lesson for the selected topic"
+
+    def execute(self, context):
+        wm = context.window_manager
+        path_id = wm.chiron_active_learning_path
+        topic_key = wm.chiron_active_topic
+        if not path_id or path_id == "NONE":
+            _set_topic_status(wm, "Select a learning path")
+            self.report({"WARNING"}, "Select a learning path first")
+            return {"CANCELLED"}
+        if not topic_key or topic_key == "NONE":
+            _set_topic_status(wm, "Select a topic")
+            self.report({"WARNING"}, "Select a topic first")
+            return {"CANCELLED"}
+        if topic_key in lesson_tracking.get_completed_topics():
+            _set_topic_status(wm, "Topic already completed")
+            self.report({"WARNING"}, "Topic already completed")
+            return {"CANCELLED"}
+        path_id, slug = learning_paths.split_topic_key(topic_key)
+        if not path_id or not slug:
+            _set_topic_status(wm, "Invalid topic")
+            self.report({"WARNING"}, "Invalid topic selection")
+            return {"CANCELLED"}
+        lesson_id = learning_paths.lesson_id_for_topic(topic_key)
+        wm.chiron_current_topic_key = topic_key
+        wm.chiron_lesson_id = lesson_id
+        wm.chiron_step_index = 0
+        wm.chiron_step_hint = ""
+        _set_status(wm, "In progress")
+        _set_topic_status(wm, f"Lesson loaded: {learning_paths.topic_label(slug)}")
+        _save_progress(wm)
+        self.report({"INFO"}, "Lesson generated")
+        return {"FINISHED"}
+
+
+class CHIRON_OT_lesson_history_reset(bpy.types.Operator):
+    bl_idname = "chiron.lesson_history_reset"
+    bl_label = "Reset Lesson History"
+    bl_description = "Clear completed lesson topics"
+
+    def execute(self, context):
+        wm = context.window_manager
+        lesson_tracking.reset_history()
+        _set_topic_status(wm, "Lesson history cleared")
+        self.report({"INFO"}, "Lesson history cleared")
+        return {"FINISHED"}
+
+
+class CHIRON_OT_lesson_start(bpy.types.Operator):
+    bl_idname = "chiron.lesson_start"
+    bl_label = "Start Lesson"
+    bl_description = "Start or reset the current lesson"
+
+    def execute(self, context):
+        wm = context.window_manager
+        wm.chiron_lesson_id = _get_lesson_id(wm)
+        wm.chiron_step_index = 0
+        wm.chiron_step_hint = ""
+        if lesson_runtime.get_step(wm.chiron_lesson_id, wm.chiron_step_index):
+            _set_status(wm, "In progress")
+        else:
+            _set_status(wm, "No steps")
+        # Diagram UI disabled for now.
+        # _update_diagram_for_current_step(wm)
+        _save_progress(wm)
+        self.report({"INFO"}, "Lesson started")
+        return {"FINISHED"}
+
+
+class CHIRON_OT_lesson_prev(bpy.types.Operator):
+    bl_idname = "chiron.lesson_prev"
+    bl_label = "Previous"
+    bl_description = "Go to previous step"
+
+    def execute(self, context):
+        wm = context.window_manager
+        if wm.chiron_step_index > 0:
+            wm.chiron_step_index -= 1
+            wm.chiron_step_hint = ""
+            _set_status(wm, "In progress")
+            # Diagram UI disabled for now.
+            # _update_diagram_for_current_step(wm)
+            _save_progress(wm)
+        return {"FINISHED"}
+
+
+class CHIRON_OT_lesson_next(bpy.types.Operator):
+    bl_idname = "chiron.lesson_next"
+    bl_label = "Next"
+    bl_description = "Validate and advance to next step"
+
+    def execute(self, context):
+        wm = context.window_manager
+        lesson_id = _get_lesson_id(wm)
+        steps = lesson_runtime.get_lesson_steps(lesson_id)
+        if not steps:
+            _set_status(wm, "No steps")
+            return {"CANCELLED"}
+        current_index = wm.chiron_step_index
+        if current_index >= len(steps):
+            _set_status(wm, "Lesson complete")
+            return {"FINISHED"}
+        if not lesson_runtime.validate_step(lesson_id, current_index):
+            _set_status(wm, "Step not complete")
+            self.report({"WARNING"}, "Step not complete")
+            return {"CANCELLED"}
+        if current_index + 1 < len(steps):
+            wm.chiron_step_index += 1
+            wm.chiron_step_hint = ""
+            _set_status(wm, "In progress")
+            # Diagram UI disabled for now.
+            # _update_diagram_for_current_step(wm)
+            _save_progress(wm)
+            return {"FINISHED"}
+        _set_status(wm, "Lesson complete")
+        if lesson_tracking.mark_topic_completed(wm.chiron_current_topic_key):
+            _set_topic_status(wm, "Topic completed")
+        _save_progress(wm)
+        self.report({"INFO"}, "Lesson complete")
+        return {"FINISHED"}
+
+
+class CHIRON_OT_lesson_hint(bpy.types.Operator):
+    bl_idname = "chiron.lesson_hint"
+    bl_label = "Hint"
+    bl_description = "Show a hint for the current step"
+
+    def execute(self, context):
+        wm = context.window_manager
+        lesson_id = _get_lesson_id(wm)
+        step = lesson_runtime.get_step(lesson_id, wm.chiron_step_index)
+        if not step:
+            _set_status(wm, "No step")
+            return {"CANCELLED"}
+        wm.chiron_step_hint = step.hint
+        self.report({"INFO"}, step.hint)
+        return {"FINISHED"}
+
+
+class CHIRON_OT_lesson_show_me(bpy.types.Operator):
+    bl_idname = "chiron.lesson_show_me"
+    bl_label = "Show Me"
+    bl_description = "Apply a safe, guided action for the current step"
+
+    def execute(self, context):
+        wm = context.window_manager
+        lesson_id = _get_lesson_id(wm)
+        ok = lesson_runtime.run_show_me(lesson_id, wm.chiron_step_index)
+        if ok:
+            _set_status(wm, "Show me applied")
+            self.report({"INFO"}, "Show me applied")
+            return {"FINISHED"}
+        _set_status(wm, "No show me for this step")
+        self.report({"WARNING"}, "No show me for this step")
+        return {"CANCELLED"}
