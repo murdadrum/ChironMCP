@@ -119,6 +119,7 @@ source = { editable = "." }
 dependencies = [
     { name = "mcp", extra = ["cli"] },
     { name = "pillow" },
+    { name = "python-dotenv" },
 ]
 
 [package.dev-dependencies]
@@ -131,6 +132,7 @@ dev = [
 requires-dist = [
     { name = "mcp", extras = ["cli"], specifier = ">=1.0.0,<2.0.0" },
     { name = "pillow", specifier = ">=10.0.0" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
 ]
 
 [package.metadata.requires-dev]

@@ -163,6 +163,35 @@ def _topic_steps_from_lesson_id(lesson_id: str) -> Optional[List[LessonStep]]:
     return _topic_steps_for(topic_key)
 
 
+def build_steps_from_source(lesson: Dict[str, object]) -> List[LessonStep]:
+    steps_data = lesson.get("steps", [])
+    steps: List[LessonStep] = []
+    for index, item in enumerate(steps_data):
+        try:
+            step_id = str(item.get("step_id", f"step-{index + 1}"))
+            title = str(item.get("title", f"Step {index + 1}"))
+            instruction = str(item.get("instruction", ""))
+            hint = str(item.get("hint", "")) or "Complete the step and click Next."
+            steps.append(
+                LessonStep(
+                    step_id=step_id,
+                    title=title,
+                    instruction=instruction,
+                    hint=hint,
+                    validator=_always_true,
+                )
+            )
+        except Exception:
+            continue
+    return steps
+
+
+def set_steps(lesson_id: str, steps: List[LessonStep]):
+    if not lesson_id:
+        return
+    PACK_CACHE[lesson_id] = steps
+
+
 def _validator_object_exists(args: Dict[str, object]) -> bool:
     name = str(args.get("name", ""))
     if not name:
@@ -321,12 +350,15 @@ def save_progress(
     step_index: int,
     learning_path_id: Optional[str] = None,
     topic_key: Optional[str] = None,
+    source_url: Optional[str] = None,
 ):
     payload = {"lesson_id": lesson_id, "step_index": step_index}
     if learning_path_id:
         payload["learning_path_id"] = learning_path_id
     if topic_key:
         payload["topic_key"] = topic_key
+    if source_url:
+        payload["source_url"] = source_url
     try:
         with open(_progress_path(), "w", encoding="utf-8") as handle:
             json.dump(payload, handle)
@@ -351,6 +383,7 @@ def load_progress_into_wm(wm):
     step_index = payload.get("step_index")
     learning_path_id = payload.get("learning_path_id")
     topic_key = payload.get("topic_key")
+    source_url = payload.get("source_url")
     if isinstance(lesson_id, str) and lesson_id:
         wm.chiron_lesson_id = lesson_id
     if isinstance(step_index, int) and step_index >= 0:
@@ -360,3 +393,5 @@ def load_progress_into_wm(wm):
     if isinstance(topic_key, str) and topic_key:
         wm.chiron_active_topic = topic_key
         wm.chiron_current_topic_key = topic_key
+    if isinstance(source_url, str) and source_url:
+        wm.chiron_source_url = source_url

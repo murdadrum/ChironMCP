@@ -440,6 +440,10 @@ def _set_topic_status(wm, message: str):
     wm.chiron_topic_status = message
 
 
+def _set_source_status(wm, message: str):
+    wm.chiron_source_status = message
+
+
 def _save_progress(wm):
     learning_path_id = wm.chiron_active_learning_path
     if learning_path_id == "NONE":
@@ -449,6 +453,7 @@ def _save_progress(wm):
         wm.chiron_step_index,
         learning_path_id=learning_path_id,
         topic_key=wm.chiron_current_topic_key,
+        source_url=wm.chiron_source_url,
     )
 
 
@@ -465,6 +470,77 @@ class CHIRON_OT_diagram_fetch(bpy.types.Operator):
             return {"FINISHED"}
         self.report({"WARNING"}, wm.chiron_diagram_status)
         return {"CANCELLED"}
+
+
+def _source_lesson_id(url: str) -> str:
+    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:12]
+    return f"source::{digest}"
+
+
+class CHIRON_OT_source_generate(bpy.types.Operator):
+    bl_idname = "chiron.source_generate"
+    bl_label = "Generate From Source"
+    bl_description = "Generate a lesson from a tutorial source URL"
+
+    def execute(self, context):
+        wm = context.window_manager
+        url = wm.chiron_source_url.strip()
+        if not url:
+            _set_source_status(wm, "Enter a source URL")
+            self.report({"WARNING"}, "Enter a source URL")
+            return {"CANCELLED"}
+        if not (url.startswith("http://") or url.startswith("https://")):
+            _set_source_status(wm, "URL must start with http:// or https://")
+            self.report({"WARNING"}, "URL must start with http:// or https://")
+            return {"CANCELLED"}
+        try:
+            response = _http_post(
+                f"{DEFAULT_MCP_HTTP}/tutorial/source",
+                {"url": url, "use_llm": bool(wm.chiron_source_use_llm)},
+            )
+        except Exception as e:
+            _set_source_status(wm, "Source fetch failed")
+            self.report({"ERROR"}, f"Source fetch failed: {e}")
+            return {"CANCELLED"}
+        if not response.get("ok"):
+            status = response.get("status")
+            error = response.get("error")
+            if error == "fetch_timeout":
+                message = "Source fetch failed: timed out"
+            elif status and isinstance(status, int):
+                message = f"Source fetch failed (HTTP {status})"
+            else:
+                message = error or "Source fetch failed"
+            _set_source_status(wm, message)
+            self.report({"ERROR"}, message)
+            return {"CANCELLED"}
+        lesson = response.get("lesson", {})
+        steps = lesson_runtime.build_steps_from_source(lesson)
+        if not steps:
+            _set_source_status(wm, "No steps found")
+            self.report({"WARNING"}, "No steps found in source")
+            return {"CANCELLED"}
+        lesson_id = _source_lesson_id(url)
+        lesson_runtime.set_steps(lesson_id, steps)
+        wm.chiron_lesson_id = lesson_id
+        wm.chiron_step_index = 0
+        wm.chiron_step_hint = ""
+        wm.chiron_current_topic_key = ""
+        _set_status(wm, "In progress")
+        title = lesson.get("title", "Source lesson")
+        if response.get("llm_used"):
+            _set_source_status(wm, f"LLM loaded: {title}")
+        else:
+            error = response.get("llm_error")
+            if error == "llm_not_configured":
+                _set_source_status(wm, f"Loaded (LLM not configured): {title}")
+            elif error == "llm_failed":
+                _set_source_status(wm, f"Loaded (LLM failed): {title}")
+            else:
+                _set_source_status(wm, f"Loaded: {title}")
+        _save_progress(wm)
+        self.report({"INFO"}, "Lesson generated from source")
+        return {"FINISHED"}
 
 
 class CHIRON_OT_lesson_generate(bpy.types.Operator):

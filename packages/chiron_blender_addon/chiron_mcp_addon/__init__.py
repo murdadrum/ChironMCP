@@ -40,6 +40,7 @@ classes = (
     operators.CHIRON_OT_send_highlight,
     # Diagram UI disabled for now.
     # operators.CHIRON_OT_diagram_fetch,
+    operators.CHIRON_OT_source_generate,
     operators.CHIRON_OT_lesson_generate,
     operators.CHIRON_OT_lesson_history_reset,
     operators.CHIRON_OT_lesson_start,
@@ -73,6 +74,18 @@ def register():
     bpy.types.WindowManager.chiron_lesson_id = bpy.props.StringProperty(
         name="Chiron Lesson ID",
         default=lesson_runtime.DEFAULT_LESSON_ID,
+    )
+    bpy.types.WindowManager.chiron_source_url = bpy.props.StringProperty(
+        name="Chiron Source URL",
+        default="",
+    )
+    bpy.types.WindowManager.chiron_source_use_llm = bpy.props.BoolProperty(
+        name="Chiron Source Use LLM",
+        default=True,
+    )
+    bpy.types.WindowManager.chiron_source_status = bpy.props.StringProperty(
+        name="Chiron Source Status",
+        default="",
     )
     bpy.types.WindowManager.chiron_active_learning_path = bpy.props.EnumProperty(
         name="Chiron Learning Path",
@@ -131,6 +144,9 @@ def unregister():
     del bpy.types.WindowManager.chiron_current_topic_key
     del bpy.types.WindowManager.chiron_active_topic
     del bpy.types.WindowManager.chiron_active_learning_path
+    del bpy.types.WindowManager.chiron_source_status
+    del bpy.types.WindowManager.chiron_source_use_llm
+    del bpy.types.WindowManager.chiron_source_url
     del bpy.types.WindowManager.chiron_lesson_id
     # Diagram UI disabled for now.
     # del bpy.types.WindowManager.chiron_diagram_status

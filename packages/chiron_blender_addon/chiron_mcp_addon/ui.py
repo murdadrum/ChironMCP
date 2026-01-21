@@ -40,6 +40,13 @@ class CHIRON_PT_panel(bpy.types.Panel):
             prefix = f"{wm.chiron_active_learning_path}{learning_paths.TOPIC_KEY_SEP}"
             completed_count = len([key for key in completed if key.startswith(prefix)])
             box.label(text=f"Topics completed: {completed_count}")
+        layout.label(text="Tutorial Source")
+        box = layout.box()
+        box.prop(wm, "chiron_source_url", text="Source URL")
+        box.prop(wm, "chiron_source_use_llm", text="Use LLM (if available)")
+        box.operator("chiron.source_generate", icon="IMPORT")
+        if wm.chiron_source_status:
+            box.label(text=wm.chiron_source_status)
         layout.label(text="Lesson")
         box = layout.box()
         if wm.chiron_current_topic_key:

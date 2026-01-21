@@ -25,3 +25,11 @@ def test_ui_diagram_endpoint():
     payload = response.json()
     assert payload["ok"] is True
     assert payload["image_base64"]
+
+
+def test_tutorial_source_invalid_url():
+    client = TestClient(create_app())
+    response = client.post("/tutorial/source", json={"url": "file:///etc/passwd"})
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["ok"] is False
