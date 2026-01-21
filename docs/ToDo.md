@@ -2,6 +2,8 @@
 
 https://docs.blender.org/manual/en/latest/, https://studio.blender.org/training/, https://mastodon.social/tags/b3d
 
+1.1 Adjust LLM persona, instructions...
+
 2. Add capability in Preference for user to specify resource targets, along with broader "Internet Access"
 
 3. In the UI, after a lesson is generated include a toggle to view the sources referenced.
