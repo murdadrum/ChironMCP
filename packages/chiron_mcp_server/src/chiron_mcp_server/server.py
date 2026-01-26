@@ -48,6 +48,98 @@ def ping() -> str:
 
 
 @mcp.tool()
+def object_create(
+    primitive: str = "cube",
+    name: str = "",
+    location: Optional[list[float]] = None,
+    rotation: Optional[list[float]] = None,
+    scale: Optional[list[float]] = None,
+) -> Dict[str, Any]:
+    """Request Blender to create an object primitive."""
+    return {
+        "ok": True,
+        "action": {
+            "type": "create_object",
+            "primitive": primitive,
+            "name": name,
+            "location": location,
+            "rotation": rotation,
+            "scale": scale,
+        },
+    }
+
+
+@mcp.tool()
+def object_list(limit: int = 50) -> Dict[str, Any]:
+    """Request Blender to list objects."""
+    return {"ok": True, "action": {"type": "list_objects", "limit": limit}}
+
+
+@mcp.tool()
+def object_update(
+    name: str,
+    new_name: str = "",
+    location: Optional[list[float]] = None,
+    rotation: Optional[list[float]] = None,
+    scale: Optional[list[float]] = None,
+    hide_viewport: Optional[bool] = None,
+    hide_render: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """Request Blender to update an object."""
+    return {
+        "ok": True,
+        "action": {
+            "type": "update_object",
+            "name": name,
+            "new_name": new_name,
+            "location": location,
+            "rotation": rotation,
+            "scale": scale,
+            "hide_viewport": hide_viewport,
+            "hide_render": hide_render,
+        },
+    }
+
+
+@mcp.tool()
+def object_delete(
+    names: Optional[list[str]] = None,
+    selected: bool = False,
+    all_objects: bool = False,
+    confirm: bool = False,
+) -> Dict[str, Any]:
+    """Request Blender to delete objects."""
+    return {
+        "ok": True,
+        "action": {
+            "type": "delete_objects",
+            "names": names or [],
+            "selected": selected,
+            "all": all_objects,
+            "confirm": confirm,
+        },
+    }
+
+
+@mcp.tool()
+def object_select(
+    names: Optional[list[str]] = None,
+    active: str = "",
+    mode: str = "set",
+) -> Dict[str, Any]:
+    """Request Blender to select objects."""
+    return {
+        "ok": True,
+        "action": {
+            "type": "select_objects",
+            "names": names or [],
+            "active": active,
+            "mode": mode,
+        },
+    }
+
+
+@mcp.tool()
 def lesson_start(lesson_id: str) -> Dict[str, Any]:
     """Start a lesson session."""
     STATE.lesson_id = lesson_id
@@ -459,7 +551,8 @@ async def chat(request: Request) -> JSONResponse:
             "role": "system",
             "content": (
                 "You are Chiron, a concise Blender assistant. Reply in plain text, "
-                "or JSON with keys: reply (string) and optional actions (array)."
+                "or JSON with keys: reply (string) and optional actions (array). "
+                "When the user asks for Blender changes, prefer actions."
             ),
         }
     ]
@@ -477,6 +570,13 @@ async def chat(request: Request) -> JSONResponse:
                 "content": (
                     "Allowed actions: "
                     + ", ".join(str(item) for item in actions if isinstance(item, str))
+                    + ". Action schemas: "
+                    + "create_object {primitive,name,location,rotation,scale}; "
+                    + "delete_objects {names,selected,all,confirm}; "
+                    + "update_object {name,new_name,location,rotation,scale,hide_viewport,hide_render}; "
+                    + "select_objects {names,active,mode}; "
+                    + "list_objects {limit}; "
+                    + "toast {message}; highlight {target}."
                 ),
             }
         )

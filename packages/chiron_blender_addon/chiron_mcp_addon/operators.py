@@ -30,7 +30,15 @@ _DEBUG_OVERLAY = False
 _DEBUG_EXPIRES = 0.0
 _CHAT_HISTORY_LIMIT = 12
 _HTTP_TIMEOUT = 20
-_CHAT_ACTIONS = ("toast", "highlight")
+_CHAT_ACTIONS = (
+    "toast",
+    "highlight",
+    "create_object",
+    "delete_objects",
+    "update_object",
+    "select_objects",
+    "list_objects",
+)
 
 SUPPORTED_SPACES = (
     bpy.types.SpaceView3D,
@@ -481,6 +489,15 @@ def _collect_blender_context():
     except Exception:
         pass
     try:
+        objects = list(bpy.context.scene.objects or [])
+        context["object_names"] = [obj.name for obj in objects[:50]]
+        type_counts = {}
+        for obj in objects:
+            type_counts[obj.type] = type_counts.get(obj.type, 0) + 1
+        context["object_type_counts"] = type_counts
+    except Exception:
+        pass
+    try:
         view_layer = bpy.context.view_layer
         active = view_layer.objects.active
         context["active_object"] = active.name if active else ""
@@ -496,9 +513,44 @@ def _collect_blender_context():
     return context
 
 
+def _ensure_object_mode():
+    try:
+        if bpy.context.mode != "OBJECT":
+            bpy.ops.object.mode_set(mode="OBJECT")
+    except Exception:
+        pass
+
+
+def _safe_vector(value, length=3):
+    if not isinstance(value, (list, tuple)):
+        return None
+    if len(value) != length:
+        return None
+    try:
+        return [float(v) for v in value]
+    except Exception:
+        return None
+
+
+def _list_objects_summary(limit=50):
+    try:
+        objects = list(bpy.context.scene.objects or [])
+    except Exception:
+        return "No scene objects available."
+    names = [obj.name for obj in objects[:limit]]
+    remaining = len(objects) - len(names)
+    if not names:
+        return "No objects in the scene."
+    summary = ", ".join(names)
+    if remaining > 0:
+        summary = f"{summary} (+{remaining} more)"
+    return f"Objects ({len(objects)}): {summary}"
+
+
 def _apply_chat_actions(wm, actions):
     if not isinstance(actions, list):
         return
+    results = []
     for action in actions:
         if not isinstance(action, dict):
             continue
@@ -513,6 +565,148 @@ def _apply_chat_actions(wm, actions):
             target = str(action.get("target", "")).strip()
             if target:
                 _show_highlight(target)
+        elif action_type == "create_object":
+            _ensure_object_mode()
+            primitive = str(action.get("primitive", "cube")).strip().lower()
+            name = str(action.get("name", "")).strip()
+            location = _safe_vector(action.get("location"))
+            rotation = _safe_vector(action.get("rotation"))
+            scale = _safe_vector(action.get("scale"))
+            try:
+                if primitive in ("cube", "box"):
+                    bpy.ops.mesh.primitive_cube_add(location=location or (0, 0, 0))
+                elif primitive in ("uv_sphere", "sphere"):
+                    bpy.ops.mesh.primitive_uv_sphere_add(location=location or (0, 0, 0))
+                elif primitive == "ico_sphere":
+                    bpy.ops.mesh.primitive_ico_sphere_add(location=location or (0, 0, 0))
+                elif primitive == "cylinder":
+                    bpy.ops.mesh.primitive_cylinder_add(location=location or (0, 0, 0))
+                elif primitive == "cone":
+                    bpy.ops.mesh.primitive_cone_add(location=location or (0, 0, 0))
+                elif primitive == "plane":
+                    bpy.ops.mesh.primitive_plane_add(location=location or (0, 0, 0))
+                else:
+                    results.append(f"Unknown primitive: {primitive}")
+                    continue
+                obj = bpy.context.active_object
+                if obj and name:
+                    obj.name = name
+                if obj and rotation:
+                    obj.rotation_euler = rotation
+                if obj and scale:
+                    obj.scale = scale
+                if obj:
+                    results.append(f"Created {obj.name} ({primitive})")
+            except Exception as exc:
+                results.append(f"Create failed: {exc}")
+        elif action_type == "delete_objects":
+            _ensure_object_mode()
+            names = action.get("names", [])
+            delete_all = bool(action.get("all"))
+            delete_selected = bool(action.get("selected"))
+            confirm = bool(action.get("confirm"))
+            if delete_all and not confirm:
+                results.append("Delete all skipped (confirm=false).")
+                continue
+            targets = []
+            if delete_all:
+                try:
+                    targets = list(bpy.context.scene.objects or [])
+                except Exception:
+                    targets = []
+            elif delete_selected:
+                try:
+                    targets = list(bpy.context.selected_objects or [])
+                except Exception:
+                    targets = []
+            elif isinstance(names, list):
+                for item in names:
+                    if not isinstance(item, str):
+                        continue
+                    obj = bpy.data.objects.get(item)
+                    if obj:
+                        targets.append(obj)
+            deleted = 0
+            for obj in targets:
+                try:
+                    bpy.data.objects.remove(obj, do_unlink=True)
+                    deleted += 1
+                except Exception:
+                    continue
+            results.append(f"Deleted {deleted} object(s)")
+        elif action_type == "update_object":
+            name = str(action.get("name", "")).strip()
+            if not name:
+                results.append("Update skipped (missing name).")
+                continue
+            obj = bpy.data.objects.get(name)
+            if not obj:
+                results.append(f"Update skipped (missing {name}).")
+                continue
+            new_name = str(action.get("new_name", "")).strip()
+            location = _safe_vector(action.get("location"))
+            rotation = _safe_vector(action.get("rotation"))
+            scale = _safe_vector(action.get("scale"))
+            hide_viewport = action.get("hide_viewport")
+            hide_render = action.get("hide_render")
+            try:
+                if new_name:
+                    obj.name = new_name
+                if location:
+                    obj.location = location
+                if rotation:
+                    obj.rotation_euler = rotation
+                if scale:
+                    obj.scale = scale
+                if isinstance(hide_viewport, bool):
+                    obj.hide_viewport = hide_viewport
+                if isinstance(hide_render, bool):
+                    obj.hide_render = hide_render
+                results.append(f"Updated {obj.name}")
+            except Exception as exc:
+                results.append(f"Update failed: {exc}")
+        elif action_type == "select_objects":
+            names = action.get("names", [])
+            active = str(action.get("active", "")).strip()
+            mode = str(action.get("mode", "set")).strip().lower()
+            if mode == "set":
+                try:
+                    bpy.ops.object.select_all(action="DESELECT")
+                except Exception:
+                    pass
+            selected = 0
+            if isinstance(names, list):
+                for item in names:
+                    if not isinstance(item, str):
+                        continue
+                    obj = bpy.data.objects.get(item)
+                    if not obj:
+                        continue
+                    try:
+                        if mode == "toggle":
+                            obj.select_set(not obj.select_get())
+                        else:
+                            obj.select_set(True)
+                        selected += 1
+                    except Exception:
+                        continue
+            if active:
+                obj = bpy.data.objects.get(active)
+                if obj:
+                    try:
+                        bpy.context.view_layer.objects.active = obj
+                    except Exception:
+                        pass
+            results.append(f"Selected {selected} object(s)")
+        elif action_type == "list_objects":
+            limit = action.get("limit", 50)
+            try:
+                limit = int(limit)
+            except Exception:
+                limit = 50
+            results.append(_list_objects_summary(limit=limit))
+    if results:
+        _append_chat_history(wm, "system", "\n".join(results))
 
 
 def _load_chat_history(wm):
