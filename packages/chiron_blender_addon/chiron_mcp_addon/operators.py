@@ -28,6 +28,9 @@ _OVERLAY_TICK = 0.1
 _TIMER_ACTIVE = False
 _DEBUG_OVERLAY = False
 _DEBUG_EXPIRES = 0.0
+_CHAT_HISTORY_LIMIT = 12
+_HTTP_TIMEOUT = 20
+_CHAT_ACTIONS = ("toast", "highlight")
 
 SUPPORTED_SPACES = (
     bpy.types.SpaceView3D,
@@ -345,7 +348,7 @@ def _http_post(url: str, payload: dict) -> dict:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=2) as resp:
+    with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
@@ -354,8 +357,28 @@ def _http_get(url: str) -> dict:
         url=url,
         method="GET",
     )
-    with urllib.request.urlopen(req, timeout=2) as resp:
+    with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def _server_url() -> str:
+    addon = bpy.context.preferences.addons.get(__package__)
+    prefs = addon.preferences if addon else None
+    if prefs:
+        server_url = getattr(prefs, "server_url", "").strip()
+        if server_url:
+            return server_url.rstrip("/")
+    env_url = os.environ.get("CHIRON_MCP_URL", "").strip()
+    if env_url:
+        return env_url.rstrip("/")
+    return DEFAULT_MCP_HTTP.rstrip("/")
+
+
+def _normalize_model_name(model: str) -> str:
+    name = model.strip()
+    if name == "chatgpt-5.2":
+        return "gpt-5.2"
+    return name
 
 
 class CHIRON_OT_ping_server(bpy.types.Operator):
@@ -366,7 +389,7 @@ class CHIRON_OT_ping_server(bpy.types.Operator):
     def execute(self, context):
         wm = context.window_manager
         try:
-            response = _http_get(f"{DEFAULT_MCP_HTTP}/health")
+            response = _http_get(f"{_server_url()}/health")
             if response.get("ok"):
                 status = response.get("status", "ok")
                 wm.chiron_server_ok = True
@@ -393,7 +416,7 @@ class CHIRON_OT_send_toast(bpy.types.Operator):
         wm = context.window_manager
         try:
             payload = {"message": wm.chiron_toast_message, "level": "INFO"}
-            response = _http_post(f"{DEFAULT_MCP_HTTP}/blender/toast", payload)
+            response = _http_post(f"{_server_url()}/blender/toast", payload)
             if response.get("ok"):
                 _show_toast(response.get("message", "Toast sent"))
                 _show_debug_overlay()
@@ -415,7 +438,7 @@ class CHIRON_OT_send_highlight(bpy.types.Operator):
         wm = context.window_manager
         try:
             payload = {"target": wm.chiron_highlight_target}
-            response = _http_post(f"{DEFAULT_MCP_HTTP}/blender/highlight", payload)
+            response = _http_post(f"{_server_url()}/blender/highlight", payload)
             if response.get("ok"):
                 _show_highlight(response.get("target", "Highlight"))
                 _show_debug_overlay()
@@ -442,6 +465,80 @@ def _set_topic_status(wm, message: str):
 
 def _set_source_status(wm, message: str):
     wm.chiron_source_status = message
+
+
+def _set_chat_status(wm, message: str):
+    wm.chiron_chat_status = message
+
+
+def _collect_blender_context():
+    context = {}
+    try:
+        scene = bpy.context.scene
+        context["scene_name"] = scene.name
+        context["object_count"] = len(scene.objects)
+        context["frame_current"] = scene.frame_current
+    except Exception:
+        pass
+    try:
+        view_layer = bpy.context.view_layer
+        active = view_layer.objects.active
+        context["active_object"] = active.name if active else ""
+        selected = list(bpy.context.selected_objects or [])
+        context["selected_count"] = len(selected)
+        context["selected_objects"] = [obj.name for obj in selected[:20]]
+    except Exception:
+        pass
+    try:
+        context["mode"] = bpy.context.mode
+    except Exception:
+        pass
+    return context
+
+
+def _apply_chat_actions(wm, actions):
+    if not isinstance(actions, list):
+        return
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        action_type = str(action.get("type", "")).strip().lower()
+        if action_type not in _CHAT_ACTIONS:
+            continue
+        if action_type == "toast":
+            message = str(action.get("message", "")).strip()
+            if message:
+                _show_toast(message)
+        elif action_type == "highlight":
+            target = str(action.get("target", "")).strip()
+            if target:
+                _show_highlight(target)
+
+
+def _load_chat_history(wm):
+    raw = wm.chiron_chat_history.strip()
+    if not raw:
+        return []
+    try:
+        history = json.loads(raw)
+    except Exception:
+        return []
+    return history if isinstance(history, list) else []
+
+
+def _save_chat_history(wm, history):
+    if len(history) > _CHAT_HISTORY_LIMIT:
+        history = history[-_CHAT_HISTORY_LIMIT:]
+    wm.chiron_chat_history = json.dumps(history)
+    return history
+
+
+def _append_chat_history(wm, role: str, content: str):
+    if not content:
+        return _load_chat_history(wm)
+    history = _load_chat_history(wm)
+    history.append({"role": role, "content": content})
+    return _save_chat_history(wm, history)
 
 
 def _save_progress(wm):
@@ -495,7 +592,7 @@ class CHIRON_OT_source_generate(bpy.types.Operator):
             return {"CANCELLED"}
         try:
             response = _http_post(
-                f"{DEFAULT_MCP_HTTP}/tutorial/source",
+                f"{_server_url()}/tutorial/source",
                 {"url": url, "use_llm": bool(wm.chiron_source_use_llm)},
             )
         except Exception as e:
@@ -540,6 +637,59 @@ class CHIRON_OT_source_generate(bpy.types.Operator):
                 _set_source_status(wm, f"Loaded: {title}")
         _save_progress(wm)
         self.report({"INFO"}, "Lesson generated from source")
+        return {"FINISHED"}
+
+
+class CHIRON_OT_chat_send(bpy.types.Operator):
+    bl_idname = "chiron.chat_send"
+    bl_label = "Send"
+    bl_description = "Send a prompt to the Chiron chat"
+
+    def execute(self, context):
+        wm = context.window_manager
+        prompt = wm.chiron_chat_prompt.strip()
+        if not prompt:
+            _set_chat_status(wm, "Enter a prompt")
+            self.report({"WARNING"}, "Enter a prompt")
+            return {"CANCELLED"}
+        history = _load_chat_history(wm)
+        payload = {"prompt": prompt, "history": history, "actions": list(_CHAT_ACTIONS)}
+        if wm.chiron_chat_use_context:
+            payload["context"] = _collect_blender_context()
+        model = _normalize_model_name(wm.chiron_chat_model)
+        if model:
+            payload["model"] = model
+        try:
+            response = _http_post(f"{_server_url()}/chat", payload)
+        except Exception as e:
+            _set_chat_status(wm, "Chat request failed")
+            self.report({"ERROR"}, f"Chat request failed: {e}")
+            return {"CANCELLED"}
+        if not response.get("ok"):
+            error = response.get("error") or "Chat failed"
+            if error == "llm_not_configured":
+                message = "LLM not configured"
+            elif error == "llm_failed":
+                message = "LLM request failed"
+            elif error == "missing_prompt":
+                message = "Enter a prompt"
+            else:
+                message = error.replace("_", " ").strip() or "Chat failed"
+            _set_chat_status(wm, message)
+            self.report({"ERROR"}, message)
+            return {"CANCELLED"}
+        reply = str(response.get("reply", "")).strip()
+        _append_chat_history(wm, "user", prompt)
+        if reply:
+            _append_chat_history(wm, "assistant", reply)
+        _apply_chat_actions(wm, response.get("actions"))
+        wm.chiron_chat_prompt = ""
+        model_name = str(response.get("model", "")).strip()
+        if model_name:
+            _set_chat_status(wm, f"Reply received (model: {model_name})")
+        else:
+            _set_chat_status(wm, "Reply received")
+        self.report({"INFO"}, "Reply received")
         return {"FINISHED"}
 
 

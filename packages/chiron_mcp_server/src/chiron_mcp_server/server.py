@@ -229,7 +229,9 @@ def _steps_from_html(html: str, url: str) -> Dict[str, Any]:
 def _llm_config() -> Optional[Dict[str, str]]:
     endpoint = os.environ.get("CHIRON_LLM_ENDPOINT", "").strip()
     api_key = os.environ.get("CHIRON_LLM_API_KEY", "").strip()
-    model = os.environ.get("CHIRON_LLM_MODEL", "").strip() or "gpt-4o-mini"
+    model = os.environ.get("CHIRON_LLM_MODEL", "").strip() or "gpt-5.2"
+    if model == "chatgpt-5.2":
+        model = "gpt-5.2"
     if not endpoint or not api_key:
         return None
     return {"endpoint": endpoint, "api_key": api_key, "model": model}
@@ -243,6 +245,26 @@ def _llm_request(prompt: str, model: str, endpoint: str, api_key: str) -> str:
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.2,
+    }
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        endpoint,
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        body = resp.read().decode("utf-8", errors="ignore")
+    return body
+
+
+def _llm_chat_request(messages: list[dict], model: str, endpoint: str, api_key: str) -> str:
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0.3,
     }
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
@@ -294,6 +316,33 @@ def _parse_llm_response(body: str) -> Optional[Dict[str, Any]]:
             return _extract_json(content)
         return None
     return payload
+
+
+def _parse_llm_text_response(body: str) -> str:
+    text = body.strip()
+    if not text:
+        return ""
+    try:
+        payload = json.loads(text)
+    except Exception:
+        return text
+    if isinstance(payload, dict):
+        if "choices" in payload and isinstance(payload.get("choices"), list):
+            choice = payload["choices"][0] if payload["choices"] else {}
+            if isinstance(choice, dict):
+                message = choice.get("message")
+                if isinstance(message, dict):
+                    content = str(message.get("content", "")).strip()
+                    if content:
+                        return content
+                text_reply = str(choice.get("text", "")).strip()
+                if text_reply:
+                    return text_reply
+        for key in ("reply", "message", "content"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return text
 
 
 def _coerce_llm_lesson(payload: Dict[str, Any], fallback_title: str) -> Optional[Dict[str, Any]]:
@@ -389,6 +438,74 @@ async def ui_diagram(request: Request) -> JSONResponse:
     png_bytes = _render_diagram_png(payload)
     b64 = base64.b64encode(png_bytes).decode("ascii")
     return JSONResponse({"ok": True, "image_base64": b64, "mime": "image/png"})
+
+
+@mcp.custom_route("/chat", methods=["POST"])
+async def chat(request: Request) -> JSONResponse:
+    payload = await request.json()
+    prompt = str(payload.get("prompt", "")).strip()
+    history = payload.get("history", [])
+    context = payload.get("context")
+    actions = payload.get("actions", [])
+    model_override = str(payload.get("model", "")).strip()
+    if not prompt:
+        return JSONResponse({"ok": False, "error": "missing_prompt"}, status_code=400)
+    config = _llm_config()
+    if not config:
+        return JSONResponse({"ok": False, "error": "llm_not_configured"}, status_code=503)
+    model = model_override or config["model"]
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are Chiron, a concise Blender assistant. Reply in plain text, "
+                "or JSON with keys: reply (string) and optional actions (array)."
+            ),
+        }
+    ]
+    if context:
+        messages.append(
+            {
+                "role": "system",
+                "content": f"Blender context (JSON): {json.dumps(context)}",
+            }
+        )
+    if actions:
+        messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "Allowed actions: "
+                    + ", ".join(str(item) for item in actions if isinstance(item, str))
+                ),
+            }
+        )
+    if isinstance(history, list):
+        for item in history:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role", "")).strip()
+            content = str(item.get("content", "")).strip()
+            if role in ("user", "assistant", "system") and content:
+                messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": prompt})
+    try:
+        response = _llm_chat_request(messages, model, config["endpoint"], config["api_key"])
+    except Exception:
+        return JSONResponse({"ok": False, "error": "llm_failed"}, status_code=502)
+    text_reply = _parse_llm_text_response(response)
+    if not text_reply:
+        return JSONResponse({"ok": False, "error": "empty_response"}, status_code=502)
+    parsed = _extract_json(text_reply)
+    if isinstance(parsed, dict):
+        reply = str(parsed.get("reply", "")).strip()
+        actions_out = parsed.get("actions", [])
+        if not reply:
+            reply = text_reply
+        return JSONResponse(
+            {"ok": True, "reply": reply, "actions": actions_out, "model": model}
+        )
+    return JSONResponse({"ok": True, "reply": text_reply, "model": model})
 
 
 @mcp.custom_route("/tutorial/source", methods=["POST"])

@@ -43,6 +43,15 @@ uv sync --group dev
 uv run python -m chiron_mcp_server.server
 ```
 
+Optional environment config (for chat + LLM-assisted tutorials):
+
+- `CHIRON_LLM_ENDPOINT` (required for LLM)
+- `CHIRON_LLM_API_KEY` (required for LLM)
+- `CHIRON_LLM_MODEL` (default: `gpt-5.2`)
+- `CHIRON_SOURCE_TIMEOUT` (default: `20`)
+- `CHIRON_SOURCE_USER_AGENT` (optional)
+- `CHIRON_SOURCE_COOKIE` (optional)
+
 ### 2) Install Blender add-on (dev)
 
 In Blender:
@@ -50,6 +59,7 @@ In Blender:
 - Edit -> Preferences -> Add-ons -> Install...
 - Select `packages/chiron_blender_addon/chiron_mcp_addon.zip` (build step below)
 - Enable "ChironMCP"
+  - Set `Server URL` if your MCP server is not on `http://localhost:8000`
 
 If you update the add-on code and don't see changes:
 
@@ -63,7 +73,9 @@ If you update the add-on code and don't see changes:
 - Open the sidebar panel (N-panel) -> "Chiron"
 - Click "Ping Server"
 - Confirm you see a toast + a successful response
-- Choose a Learning Path + topic and click "Generate Lesson"
+- Send a prompt in the Chat panel and confirm you get a reply
+
+Note: You can also override the server URL via `CHIRON_MCP_URL` in the Blender environment.
 
 ## Learning Paths (demo)
 

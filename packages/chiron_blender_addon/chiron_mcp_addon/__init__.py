@@ -14,6 +14,12 @@ from . import learning_paths, lesson_runtime, operators, ui
 class CHIRON_Preferences(bpy.types.AddonPreferences):
     bl_idname = __name__
 
+    server_url: bpy.props.StringProperty(
+        name="Server URL",
+        description="Base URL for the Chiron MCP server",
+        default="http://localhost:8000",
+    )
+
     enable_path_modeling_geometry_nodes: bpy.props.BoolProperty(
         name="Geometry Nodes",
         description="Enable Modeling > Geometry Nodes learning path",
@@ -25,6 +31,7 @@ class CHIRON_Preferences(bpy.types.AddonPreferences):
         wm = context.window_manager
         icon = "CHECKMARK" if wm.chiron_server_ok else "ERROR"
         layout.label(text=f"Server: {wm.chiron_server_status}", icon=icon)
+        layout.prop(self, "server_url", text="Server URL")
         layout.operator("chiron.ping_server", icon="URL")
         layout.separator()
         layout.label(text="Learning Paths")
@@ -41,6 +48,7 @@ classes = (
     # Diagram UI disabled for now.
     # operators.CHIRON_OT_diagram_fetch,
     operators.CHIRON_OT_source_generate,
+    operators.CHIRON_OT_chat_send,
     operators.CHIRON_OT_lesson_generate,
     operators.CHIRON_OT_lesson_history_reset,
     operators.CHIRON_OT_lesson_start,
@@ -74,6 +82,26 @@ def register():
     bpy.types.WindowManager.chiron_lesson_id = bpy.props.StringProperty(
         name="Chiron Lesson ID",
         default=lesson_runtime.DEFAULT_LESSON_ID,
+    )
+    bpy.types.WindowManager.chiron_chat_prompt = bpy.props.StringProperty(
+        name="Chiron Chat Prompt",
+        default="",
+    )
+    bpy.types.WindowManager.chiron_chat_history = bpy.props.StringProperty(
+        name="Chiron Chat History",
+        default="[]",
+    )
+    bpy.types.WindowManager.chiron_chat_status = bpy.props.StringProperty(
+        name="Chiron Chat Status",
+        default="",
+    )
+    bpy.types.WindowManager.chiron_chat_model = bpy.props.StringProperty(
+        name="Chiron Chat Model",
+        default="gpt-5.2",
+    )
+    bpy.types.WindowManager.chiron_chat_use_context = bpy.props.BoolProperty(
+        name="Use Blender Context",
+        default=True,
     )
     bpy.types.WindowManager.chiron_source_url = bpy.props.StringProperty(
         name="Chiron Source URL",
@@ -133,6 +161,11 @@ def register():
 
 
 def unregister():
+    del bpy.types.WindowManager.chiron_chat_use_context
+    del bpy.types.WindowManager.chiron_chat_model
+    del bpy.types.WindowManager.chiron_chat_status
+    del bpy.types.WindowManager.chiron_chat_history
+    del bpy.types.WindowManager.chiron_chat_prompt
     del bpy.types.WindowManager.chiron_server_status
     del bpy.types.WindowManager.chiron_server_ok
     del bpy.types.WindowManager.chiron_highlight_target
